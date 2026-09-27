@@ -29,3 +29,27 @@ Request narrowly scoped permission before creating project directories outside t
 - **Notes**: Created the directories after scoped user approval.
 
 ---
+
+## [ERR-20260927-002] go_build_cache_target
+
+**Logged**: 2026-09-27T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The sandbox denied creation of a workspace-local Go build cache.
+
+### Error
+```
+failed to initialize build cache at /Users/links/Code/chainindex/.cache/go-build: mkdir /Users/links/Code/chainindex/.cache: operation not permitted
+```
+
+### Suggested Fix
+Use a task-specific cache directory under `/private/tmp`, which is writable in this environment.
+
+### Resolution
+- **Resolved**: 2026-09-27T00:00:00+08:00
+- **Notes**: Subsequent Go verification uses `/private/tmp/chainindex-go-build`.
+
+---
