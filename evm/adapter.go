@@ -169,6 +169,36 @@ func (c *Client) CanonicalHash(ctx context.Context, cursor chainindex.Cursor) (s
 	return lowerHex(header.Hash().Bytes()), nil
 }
 
+// Blocks returns every canonical header in a scanned range. The raw header is
+// retained as JSON so new EVM header fields are not lost by this package.
+func (c *Client) Blocks(ctx context.Context, blockRange chainindex.Range) ([]chainindex.Block, error) {
+	from, err := parseCursor(blockRange.From)
+	if err != nil { return nil, err }
+	to, err := parseCursor(blockRange.To)
+	if err != nil || from > to { return nil, ErrInvalidCursor }
+	blocks := make([]chainindex.Block, 0, to-from+1)
+	for height := from; height <= to; height++ {
+		header, err := c.reader.HeaderByNumber(ctx, new(big.Int).SetUint64(height))
+		if err != nil { return nil, err }
+		if header == nil { return nil, ErrMissingHeader }
+		raw, err := json.Marshal(header)
+		if err != nil { return nil, err }
+		baseFee := ""
+		if header.BaseFee != nil { baseFee = header.BaseFee.String() }
+		blocks = append(blocks, chainindex.Block{
+			ChainNamespace: c.Namespace(), ChainID: c.chainID,
+			Number: strconv.FormatUint(height, 10), Hash: lowerHash(header.Hash()),
+			ParentHash: lowerHash(header.ParentHash), Timestamp: time.Unix(int64(header.Time), 0).UTC(),
+			Miner: lowerAddress(header.Coinbase), GasLimit: strconv.FormatUint(header.GasLimit, 10),
+			GasUsed: strconv.FormatUint(header.GasUsed, 10), BaseFeePerGas: baseFee,
+			TransactionsRoot: lowerHash(header.TxHash), StateRoot: lowerHash(header.Root),
+			ReceiptsRoot: lowerHash(header.ReceiptHash), LogsBloom: lowerHex(header.Bloom[:]), Raw: raw,
+		})
+		if height == math.MaxUint64 { break }
+	}
+	return blocks, nil
+}
+
 func (c *Client) Events(ctx context.Context, blockRange chainindex.Range, jobID string, registrations chainindex.Registrations) ([]chainindex.Event, error) {
 	from, err := parseCursor(blockRange.From)
 	if err != nil {

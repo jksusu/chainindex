@@ -2,12 +2,12 @@ package chainindex_test
 
 import (
 	"context"
-	"database/sql"
 	"os"
 
 	chainindex "github.com/jksusu/chainindex"
 	"github.com/jksusu/chainindex/evm"
-	"github.com/jksusu/chainindex/storage"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func ExampleIndexer_SyncOnce() {
@@ -15,11 +15,13 @@ func ExampleIndexer_SyncOnce() {
 
 	// Run migrations/postgres/001_chainindex.sql before creating the indexer.
 	// The application owns this handle, including its lifecycle and pool settings.
-	db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
+	db, err := gorm.Open(postgres.Open(os.Getenv("DATABASE_URL")), &gorm.Config{})
 	if err != nil {
 		panic(err)
 	}
-	defer db.Close()
+	sqlDB, err := db.DB()
+	if err != nil { panic(err) }
+	defer sqlDB.Close()
 
 	client, err := evm.Dial(ctx, os.Getenv("EVM_RPC_URL"), "1")
 	if err != nil {
@@ -46,7 +48,7 @@ func ExampleIndexer_SyncOnce() {
 		panic(err)
 	}
 
-	indexer, err := chainindex.New(db, storage.Postgres, []chainindex.Job{{
+	indexer, err := chainindex.New(db, []chainindex.Job{{
 		ID:                 "mainnet-events",
 		ChainNamespace:     "evm",
 		ChainID:            "1",

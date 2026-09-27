@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jksusu/chainindex/storage"
+	"gorm.io/gorm"
 )
 
 var (
@@ -26,8 +27,8 @@ type Indexer struct {
 }
 
 // New constructs an Indexer using the caller-owned database capability.
-func New(db storage.DB, dialect storage.Dialect, jobs []Job, adapters []Adapter) (*Indexer, error) {
-	store, err := storage.New(db, dialect)
+func New(db *gorm.DB, jobs []Job, adapters []Adapter) (*Indexer, error) {
+	store, err := storage.New(db)
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +78,7 @@ func (i *Indexer) SyncOnce(ctx context.Context) error {
 
 func (i *Indexer) syncJob(ctx context.Context, job Job, adapter Adapter) (err error) {
 	tx, err := i.store.Begin(ctx)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	committed := false
 	defer func() {
 		if !committed {
@@ -107,9 +106,7 @@ func (i *Indexer) syncJob(ctx context.Context, job Job, adapter Adapter) (err er
 			if err := i.store.RecordReorg(ctx, tx, key, message); err != nil {
 				return err
 			}
-			if err := tx.Commit(); err != nil {
-				return err
-			}
+			if err := tx.Commit().Error; err != nil { return err }
 			committed = true
 			return fmt.Errorf("%w: %s", ErrReorgDetected, message)
 		}
@@ -124,9 +121,7 @@ func (i *Indexer) syncJob(ctx context.Context, job Job, adapter Adapter) (err er
 		return err
 	}
 	if rangeToScan.From.Value == "" && rangeToScan.To.Value == "" {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+		if err := tx.Commit().Error; err != nil { return err }
 		committed = true
 		return nil
 	}
@@ -139,15 +134,21 @@ func (i *Indexer) syncJob(ctx context.Context, job Job, adapter Adapter) (err er
 	if err != nil {
 		return err
 	}
+	if provider, ok := adapter.(BlockProvider); ok {
+		blocks, err := provider.Blocks(ctx, rangeToScan)
+		if err != nil { return err }
+		for _, block := range blocks {
+			if block.ChainNamespace != job.ChainNamespace || block.ChainID != job.ChainID { return ErrInvalidEvent }
+			if err := i.store.InsertBlock(ctx, tx, storage.Block{ChainNamespace: block.ChainNamespace, ChainID: block.ChainID, BlockNumber: block.Number, BlockHash: block.Hash, ParentHash: block.ParentHash, Timestamp: block.Timestamp, Miner: block.Miner, GasLimit: block.GasLimit, GasUsed: block.GasUsed, BaseFeePerGas: block.BaseFeePerGas, TransactionsRoot: block.TransactionsRoot, StateRoot: block.StateRoot, ReceiptsRoot: block.ReceiptsRoot, LogsBloom: block.LogsBloom, RawBlock: block.Raw}); err != nil { return err }
+		}
+	}
 	for _, event := range events {
 		if event.ChainNamespace != job.ChainNamespace || event.ChainID != job.ChainID || event.JobID != job.ID {
 			return ErrInvalidEvent
 		}
 		inserted, err := i.store.InsertEvent(ctx, tx, storage.Event{
 			ChainNamespace: event.ChainNamespace, ChainID: event.ChainID, JobID: event.JobID,
-			TransactionID: event.TransactionID, EventIndex: event.EventIndex, Emitter: event.Emitter,
-			EventType: event.EventType, Cursor: event.Cursor.Value, CanonicalHash: event.CanonicalHash,
-			OccurredAt: event.OccurredAt, Payload: event.Payload, Arguments: event.Arguments,
+			BlockNumber: first(event.BlockNumber, event.Cursor.Value), BlockHash: first(event.BlockHash, event.CanonicalHash), TransactionHash: first(event.TransactionHash, event.TransactionID), TransactionIndex: event.TransactionIndex, LogIndex: first(event.LogIndex, event.EventIndex), Address: first(event.Address, event.Emitter), Topic0: first(event.Topic0, event.EventType), Topics: event.Topics, Data: event.Data, Removed: event.Removed, EventName: event.EventName, DecodedArgs: firstJSON(event.DecodedArgs, event.Arguments), RawLog: firstJSON(event.RawLog, event.Payload), OccurredAt: event.OccurredAt,
 		})
 		if err != nil {
 			return err
@@ -172,12 +173,13 @@ func (i *Indexer) syncJob(ctx context.Context, job Job, adapter Adapter) (err er
 			return ErrCursorChanged
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
+	if err := tx.Commit().Error; err != nil { return err }
 	committed = true
 	return nil
 }
+
+func first(value, fallback string) string { if value != "" { return value }; return fallback }
+func firstJSON(value, fallback []byte) []byte { if len(value) != 0 { return value }; return fallback }
 
 // Run repeatedly synchronizes jobs until ctx is cancelled.
 func (i *Indexer) Run(ctx context.Context) error {
@@ -229,9 +231,7 @@ func (i *Indexer) Rewind(ctx context.Context, jobID string, cursor Cursor) (err 
 			return err
 		}
 		tx, err := i.store.Begin(ctx)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
 		committed := false
 		defer func() {
 			if !committed {
@@ -257,9 +257,7 @@ func (i *Indexer) Rewind(ctx context.Context, jobID string, cursor Cursor) (err 
 		if err != nil {
 			return err
 		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
+		if err := tx.Commit().Error; err != nil { return err }
 		committed = true
 		return nil
 	}

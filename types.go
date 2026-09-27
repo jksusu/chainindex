@@ -3,10 +3,11 @@ package chainindex
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -43,6 +44,41 @@ type Event struct {
 	OccurredAt     time.Time
 	Payload        json.RawMessage
 	Arguments      json.RawMessage
+	// Raw EVM log fields are populated by EVM adapters. Other adapters may
+	// leave them empty while still using the normalized fields above.
+	BlockNumber      string
+	BlockHash        string
+	TransactionHash  string
+	TransactionIndex string
+	LogIndex         string
+	Address          string
+	Topic0           string
+	Topics           json.RawMessage
+	Data             string
+	Removed          bool
+	EventName        string
+	DecodedArgs      json.RawMessage
+	RawLog           json.RawMessage
+}
+
+// Block is a normalized, durable representation of a scanned chain block.
+// Numeric EVM values are strings so no chain quantity is truncated.
+type Block struct {
+	ChainNamespace  string
+	ChainID         string
+	Number          string
+	Hash            string
+	ParentHash      string
+	Timestamp       time.Time
+	Miner           string
+	GasLimit        string
+	GasUsed         string
+	BaseFeePerGas   string
+	TransactionsRoot string
+	StateRoot       string
+	ReceiptsRoot    string
+	LogsBloom       string
+	Raw             json.RawMessage
 }
 
 // EventIdentity is the stable, normalized uniqueness key for an Event.
@@ -79,7 +115,7 @@ type Registrations []Registration
 // Handler writes application-specific data for a newly persisted event.
 // It must use only tx for database writes. A nil Handler is allowed and is a
 // no-op, so a Job can persist only normalized events.
-type Handler func(context.Context, *sql.Tx, Event) error
+type Handler func(context.Context, *gorm.DB, Event) error
 
 // Job configures an independently checkpointed event index.
 type Job struct {
@@ -123,4 +159,11 @@ type Adapter interface {
 	NextRange(after *Cursor, start Cursor, safe Cursor, limit uint64) (Range, error)
 	Events(context.Context, Range, string, Registrations) ([]Event, error)
 	CanonicalHash(context.Context, Cursor) (string, error)
+}
+
+// BlockProvider is implemented by adapters that can supply complete scanned
+// block records. It is optional so future non-EVM adapters can be introduced
+// incrementally without weakening cursor safety.
+type BlockProvider interface {
+	Blocks(context.Context, Range) ([]Block, error)
 }

@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jksusu/chainindex/storage"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 )
 
 func TestNewRejectsMismatchedAdapter(t *testing.T) {
-	_, err := New(newIndexerDB(t, nil), storage.Postgres,
+	_, err := New(newIndexerDB(t, nil),
 		[]Job{testJob()}, []Adapter{&fakeAdapter{namespace: "solana", chainID: "1"}})
 	if !errors.Is(err, ErrAdapterNotFound) {
 		t.Fatalf("New() error = %v, want ErrAdapterNotFound", err)
@@ -27,7 +28,7 @@ func TestNewSupportsAdaptersForSameNamespaceOnDifferentChains(t *testing.T) {
 	second := &fakeAdapter{namespace: "evm", chainID: "10"}
 	other := testJob()
 	other.ID, other.ChainID = "optimism", "10"
-	if _, err := New(newIndexerDB(t, nil), storage.Postgres, []Job{testJob(), other}, []Adapter{first, second}); err != nil {
+	if _, err := New(newIndexerDB(t, nil), []Job{testJob(), other}, []Adapter{first, second}); err != nil {
 		t.Fatalf("New() error = %v, want nil", err)
 	}
 }
@@ -35,7 +36,7 @@ func TestNewSupportsAdaptersForSameNamespaceOnDifferentChains(t *testing.T) {
 func TestNewRejectsDuplicateJobIDsAcrossChains(t *testing.T) {
 	other := testJob()
 	other.ChainID = "10"
-	if _, err := New(newIndexerDB(t, nil), storage.Postgres, []Job{testJob(), other}, []Adapter{&fakeAdapter{namespace: "evm", chainID: "1"}, &fakeAdapter{namespace: "evm", chainID: "10"}}); !errors.Is(err, ErrDuplicateJobID) {
+	if _, err := New(newIndexerDB(t, nil), []Job{testJob(), other}, []Adapter{&fakeAdapter{namespace: "evm", chainID: "1"}, &fakeAdapter{namespace: "evm", chainID: "10"}}); !errors.Is(err, ErrDuplicateJobID) {
 		t.Fatalf("New() error = %v, want ErrDuplicateJobID", err)
 	}
 }
@@ -46,7 +47,7 @@ func TestSyncOnceForwardsConfirmationAndUsesFirstStartCursor(t *testing.T) {
 	job := testJob()
 	job.StartCursor = Cursor{Value: "0"}
 	job.ConfirmationPolicy = ConfirmationPolicy{Confirmations: 8}
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{job}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{job}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,15 +63,15 @@ func TestSyncOnceForwardsConfirmationAndUsesFirstStartCursor(t *testing.T) {
 	if adapter.gotStart != job.StartCursor {
 		t.Fatalf("NextRange start = %+v, want %+v", adapter.gotStart, job.StartCursor)
 	}
-	if !state.containsExec("INSERT INTO chainindex_cursors") {
+	if !state.containsExec("chainindex_cursors") {
 		t.Fatal("first sync did not create cursor")
 	}
 }
 
 func TestSyncOnceChecksPersistedCursorHashBeforeScanning(t *testing.T) {
-	state := &indexerDBState{rows: [][]driver.Value{{"5", "stored", storage.StatusReady, nil}}}
+	state := &indexerDBState{rows: [][]driver.Value{{"5", "stored", "ready", nil}}}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", hash: map[string]string{"5": "different"}}
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{testJob()}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{testJob()}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,18 +82,18 @@ func TestSyncOnceChecksPersistedCursorHashBeforeScanning(t *testing.T) {
 	if adapter.nextCalls != 0 {
 		t.Fatal("must not scan after reorg detection")
 	}
-	if !state.containsExec("UPDATE chainindex_cursors SET status") {
+	if !state.containsExec("chainindex_cursors") {
 		t.Fatal("reorg status was not persisted")
 	}
 }
 
 func TestSyncOnceSuppressesDuplicateHandlersAndAdvancesCursor(t *testing.T) {
-	state := &indexerDBState{rows: [][]driver.Value{{"5", "h5", storage.StatusReady, nil}}, execRows: []int64{0, 1}}
+	state := &indexerDBState{rows: [][]driver.Value{{"5", "h5", "ready", nil}}, execRows: []int64{0, 1}}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", safe: Cursor{Value: "10"}, next: Range{From: Cursor{Value: "6"}, To: Cursor{Value: "10"}}, hash: map[string]string{"5": "h5", "10": "h10"}, events: []Event{testEventForIndexer()}}
 	handled := 0
 	job := testJob()
-	job.Handler = func(context.Context, *sql.Tx, Event) error { handled++; return nil }
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{job}, []Adapter{adapter})
+	job.Handler = func(context.Context, *gorm.DB, Event) error { handled++; return nil }
+	indexer, err := New(newIndexerDB(t, state), []Job{job}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestSyncOnceSuppressesDuplicateHandlersAndAdvancesCursor(t *testing.T) {
 	if handled != 0 {
 		t.Fatalf("handler calls = %d, want 0 for duplicate", handled)
 	}
-	if !state.containsExec("UPDATE chainindex_cursors SET cursor") {
+	if !state.containsExec("chainindex_cursors") {
 		t.Fatal("cursor did not advance")
 	}
 }
@@ -110,7 +111,7 @@ func TestSyncOnceSuppressesDuplicateHandlersAndAdvancesCursor(t *testing.T) {
 func TestSyncOncePassesJobIDToAdapterEvents(t *testing.T) {
 	state := &indexerDBState{}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", safe: Cursor{Value: "1"}, next: Range{From: Cursor{Value: "1"}, To: Cursor{Value: "1"}}, hash: map[string]string{"1": "h1"}}
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{testJob()}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{testJob()}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +127,8 @@ func TestSyncOnceRollsBackWhenHandlerFails(t *testing.T) {
 	state := &indexerDBState{execRows: []int64{1}}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", safe: Cursor{Value: "1"}, next: Range{From: Cursor{Value: "1"}, To: Cursor{Value: "1"}}, hash: map[string]string{"1": "h1"}, events: []Event{testEventForIndexer()}}
 	job := testJob()
-	job.Handler = func(context.Context, *sql.Tx, Event) error { return errors.New("handler failed") }
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{job}, []Adapter{adapter})
+	job.Handler = func(context.Context, *gorm.DB, Event) error { return errors.New("handler failed") }
+	indexer, err := New(newIndexerDB(t, state), []Job{job}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +145,7 @@ func TestRunPollsUntilCancellation(t *testing.T) {
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", safe: Cursor{Value: "0"}, hash: map[string]string{"0": "h0"}}
 	job := testJob()
 	job.PollInterval = time.Millisecond
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{job}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{job}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,28 +165,28 @@ func TestRunPollsUntilCancellation(t *testing.T) {
 }
 
 func TestRewindClearsReorgStatusAndAllowsSync(t *testing.T) {
-	state := &indexerDBState{rows: [][]driver.Value{{"5", "old", storage.StatusReorgDetected, "bad hash"}}, execRows: []int64{1}}
+	state := &indexerDBState{rows: [][]driver.Value{{"5", "old", "reorg_detected", "bad hash"}}, execRows: []int64{1}}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", safe: Cursor{Value: "5"}, hash: map[string]string{"3": "h3"}, next: Range{}}
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{testJob()}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{testJob()}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := indexer.Rewind(context.Background(), "transfers", Cursor{Value: "3"}); err != nil {
 		t.Fatal(err)
 	}
-	if !state.containsExec("UPDATE chainindex_cursors SET cursor") {
+	if !state.containsExec("chainindex_cursors") {
 		t.Fatal("rewind did not write cursor")
 	}
-	state.rows = [][]driver.Value{{"3", "h3", storage.StatusReady, nil}}
+	state.rows = [][]driver.Value{{"3", "h3", "ready", nil}}
 	if err := indexer.SyncOnce(context.Background()); err != nil {
 		t.Fatalf("sync after rewind: %v", err)
 	}
 }
 
 func TestRewindRejectsLostCursorCompareAndSwap(t *testing.T) {
-	state := &indexerDBState{rows: [][]driver.Value{{"5", "old", storage.StatusReorgDetected, "bad hash"}}, execRows: []int64{0}}
+	state := &indexerDBState{rows: [][]driver.Value{{"5", "old", "reorg_detected", "bad hash"}}, execRows: []int64{0}}
 	adapter := &fakeAdapter{namespace: "evm", chainID: "1", hash: map[string]string{"3": "h3"}}
-	indexer, err := New(newIndexerDB(t, state), storage.Postgres, []Job{testJob()}, []Adapter{adapter})
+	indexer, err := New(newIndexerDB(t, state), []Job{testJob()}, []Adapter{adapter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func (s *indexerDBState) containsExec(part string) bool {
 	}
 	return false
 }
-func newIndexerDB(t *testing.T, state *indexerDBState) *sql.DB {
+func newIndexerDB(t *testing.T, state *indexerDBState) *gorm.DB {
 	t.Helper()
 	if state == nil {
 		state = &indexerDBState{}
@@ -268,7 +269,9 @@ func newIndexerDB(t *testing.T, state *indexerDBState) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return db
+	gormDB, err := gorm.Open(mysql.New(mysql.Config{Conn: db, SkipInitializeWithVersion: true}), &gorm.Config{})
+	if err != nil { t.Fatal(err) }
+	return gormDB
 }
 
 type indexerDriver struct{ state *indexerDBState }

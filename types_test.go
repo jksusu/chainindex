@@ -2,13 +2,13 @@ package chainindex
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/jksusu/chainindex/storage"
+	"gorm.io/gorm"
 )
 
 func TestEventIdentityIsStableAndChainNeutral(t *testing.T) {
@@ -46,7 +46,7 @@ func TestJobValidateRejectsMissingIdentityAndInvalidConfiguration(t *testing.T) 
 		ChainID:        "1",
 		StartCursor:    Cursor{Value: "0"},
 		BatchLimit:     100,
-		Handler:        func(context.Context, *sql.Tx, Event) error { return nil },
+		Handler:        func(context.Context, *gorm.DB, Event) error { return nil },
 	}
 
 	for _, tc := range []struct {

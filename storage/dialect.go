@@ -1,11 +1,9 @@
-// Package storage contains database-specific configuration for chainindex.
 package storage
 
 import "errors"
 
-var ErrInvalidDialect = errors.New("chainindex: invalid storage dialect")
-
-// Dialect selects the SQL syntax used by the storage layer.
+// Dialect is retained for source compatibility. New callers use GORM's
+// configured driver; it is no longer supplied to Store.New.
 type Dialect string
 
 const (
@@ -13,12 +11,9 @@ const (
 	MySQL    Dialect = "mysql"
 )
 
-// Validate reports whether d is a supported SQL dialect.
+var ErrInvalidDialect = errors.New("chainindex: invalid storage dialect")
+
 func (d Dialect) Validate() error {
-	switch d {
-	case Postgres, MySQL:
-		return nil
-	default:
-		return ErrInvalidDialect
-	}
+	if d == Postgres || d == MySQL { return nil }
+	return ErrInvalidDialect
 }

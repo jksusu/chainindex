@@ -1,3 +1,4 @@
 # Local agent workflow records; not part of the published module.
 .learnings/
 docs/superpowers/
+.cache/

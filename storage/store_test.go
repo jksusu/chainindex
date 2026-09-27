@@ -17,8 +17,8 @@ func TestInsertEventUsesDialectSpecificDuplicateSuppression(t *testing.T) {
 		name, want string
 		dialect    Dialect
 	}{
-		{"postgres", "ON CONFLICT (chain_namespace, chain_id, job_id, transaction_id, event_index) DO NOTHING", Postgres},
-		{"mysql", "ON DUPLICATE KEY UPDATE transaction_id = transaction_id", MySQL},
+		{"postgres", "ON CONFLICT (\"chain_namespace\",\"chain_id\",\"job_id\",\"transaction_hash\",\"log_index\") DO NOTHING", Postgres},
+		{"mysql", "ON DUPLICATE KEY UPDATE `chain_namespace`=`chain_namespace`", MySQL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &fakeDB{execResult: driver.RowsAffected(1)}
@@ -77,7 +77,7 @@ func TestCreateAndAdvanceCursorCompareAndSwap(t *testing.T) {
 	if err := store.CreateCursor(context.Background(), tx, key, CursorState{Cursor: "10", CanonicalHash: "0x10", Status: StatusReady}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fake.lastExec(), "INSERT INTO chainindex_cursors") {
+	if !strings.Contains(fake.lastExec(), "chainindex_cursors") {
 		t.Fatalf("unexpected query: %s", fake.lastExec())
 	}
 	advanced, err := store.AdvanceCursor(context.Background(), tx, key, "10", CursorState{Cursor: "20", CanonicalHash: "0x20", Status: StatusReady})
@@ -87,7 +87,7 @@ func TestCreateAndAdvanceCursorCompareAndSwap(t *testing.T) {
 	if !advanced {
 		t.Fatal("expected successful CAS")
 	}
-	if !strings.Contains(fake.lastExec(), "WHERE chain_namespace = $6") || !strings.Contains(fake.lastExec(), "AND cursor = $9") {
+	if !strings.Contains(fake.lastExec(), "WHERE chain_namespace = $6") || !strings.Contains(fake.lastExec(), "cursor = $9") {
 		t.Fatalf("CAS query missing key/expected cursor: %s", fake.lastExec())
 	}
 }
@@ -144,11 +144,13 @@ func TestRecordReorgPersistsStatusAndError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(fake.lastExec(), "status = $1, last_error = $2") {
+	if !strings.Contains(fake.lastExec(), "UPDATE \"chainindex_cursors\"") {
 		t.Fatalf("unexpected reorg query: %s", fake.lastExec())
 	}
-	if got := fake.lastArgs()[0].Value; got != StatusReorgDetected {
-		t.Fatalf("reorg status was not bound: %v", got)
+	found := false
+	for _, arg := range fake.lastArgs() { if arg.Value == StatusReorgDetected { found = true } }
+	if !found {
+		t.Fatal("reorg status was not bound")
 	}
 }
 

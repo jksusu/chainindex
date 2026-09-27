@@ -1,7 +1,7 @@
 # ChainIndex
 
 ChainIndex is a Go library for durably indexing blockchain events into an
-application-owned MySQL or PostgreSQL database. It keeps a separate checkpoint
+application-owned GORM database. It keeps a separate checkpoint
 for every job and persists normalized events before calling your handler in the
 same transaction.
 
@@ -33,15 +33,14 @@ mysql --defaults-extra-file=... < migrations/mysql/001_chainindex.sql
 The migrations are idempotent, but ChainIndex never runs migrations on your
 behalf. Apply the file that matches your database from the version of the
 library you deploy, as part of your normal migration workflow. The tables are
-`chainindex_cursors` (per-job checkpoints and reorganization state) and
-`chainindex_events` (deduplicated normalized events).
+`chainindex_cursors` (progress), `chainindex_blocks` (scanned blocks), and
+`chainindex_events` (raw EVM logs plus decoded arguments).
 
 ## Index EVM events
 
-Open and configure a `*sql.DB` in your application, then pass it to
-`chainindex.New` with the matching `storage.Dialect`. The library only requires
-the transaction-starting capability of the supplied handle; it does not close
-the database or manage its connection pool.
+Open and configure a caller-owned `*gorm.DB` in your application, then pass it
+to `chainindex.New`. GORM selects the database dialect; ChainIndex does not
+close the database or manage its connection pool.
 
 `example_test.go` contains a complete compiling example. In short:
 
@@ -54,7 +53,7 @@ token, err := evm.NewContract(tokenAddress, tokenABI)
 governor, err := evm.NewContract(governorAddress, governorABI)
 registrations, err := evm.Registrations(token, governor)
 
-indexer, err := chainindex.New(db, storage.Postgres, []chainindex.Job{{
+indexer, err := chainindex.New(db, []chainindex.Job{{
 	ID: "mainnet-events", ChainNamespace: "evm", ChainID: "1",
 	StartCursor: chainindex.Cursor{Value: "19000000"},
 	ConfirmationPolicy: chainindex.ConfirmationPolicy{Confirmations: 12},
@@ -76,7 +75,7 @@ call it from your scheduler for controlled runs. `Run(ctx)` repeatedly calls
 ## Transactional handlers and duplicates
 
 For each newly inserted normalized event, ChainIndex invokes the job's
-`Handler` with the same `*sql.Tx` used for the event and cursor. Use that
+`Handler` with the same `*gorm.DB` transaction used for the block, event and cursor. Use that
 transaction for application writes. If the handler, persistence, or checkpoint
 advance fails, the transaction is rolled back. A duplicate normalized event is
 not dispatched to the handler again.
